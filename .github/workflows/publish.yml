@@ -43,7 +43,7 @@ jobs:
           files=sorted(p for p in src.rglob("*") if p.is_file())
           assert (src/"manifest.json").exists()
           target=Path("dist/smart-auto-refresh-v1.1.1.zip")
-          with ZipFile(target,"w",compression=ZIP_DEFLATED,compresslevel=9) as archive:
+          with ZipFile(target,"w",compression=ZIP_DEFLATED,compresslevel=9,strict_timestamps=False) as archive:
               for p in files:
                   archive.write(p,arcname=str(p))
           print(f"Packaged {len(files)} files into {target}")
