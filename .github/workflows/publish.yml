@@ -1,0 +1,73 @@
+name: Publish verified Chrome ZIP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "source-bundle/**"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chrome-extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and verify original source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source-bundle/source.part0 source-bundle/source.part1 > source.tar.xz
+          echo "6d45f9aad84e29a9acb42399a6f5b1dd94f50e41285adbc6dc01bab3e6065275  source.tar.xz" | sha256sum -c -
+          tar -xJf source.tar.xz
+          node -e 'const m=require("./smart-auto-refresh/manifest.json");if(m.manifest_version!==3||m.version!=="1.1.1")process.exit(1)'
+          node --check smart-auto-refresh/popup.js
+          node --check smart-auto-refresh/content.js
+          node --check smart-auto-refresh/background-v111.js
+      - name: Create verified versioned ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile,ZIP_DEFLATED
+          src=Path("smart-auto-refresh")
+          files=sorted(p for p in src.rglob("*") if p.is_file())
+          assert (src/"manifest.json").exists()
+          target=Path("dist/smart-auto-refresh-v1.1.1.zip")
+          with ZipFile(target,"w",compression=ZIP_DEFLATED,compresslevel=9) as archive:
+              for p in files:
+                  archive.write(p,arcname=str(p))
+          print(f"Packaged {len(files)} files into {target}")
+          PY
+          (cd dist && sha256sum smart-auto-refresh-v1.1.1.zip > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view v1.1.1 >/dev/null 2>&1 && exit 0
+          gh release create v1.1.1 dist/smart-auto-refresh-v1.1.1.zip dist/SHA256SUMS.txt \
+            --title "Smart Auto Refresh v1.1.1" \
+            --notes "Manifest V3 Chrome Extension. Unzip the ZIP, open chrome://extensions, turn on Developer mode and choose Load unpacked for the smart-auto-refresh folder. Browser-internal URLs are not supported. Custom 1–59 second refresh can be throttled in background tabs. This extension requests broad HTTP(S) host permissions because it operates on user-selected tabs."
+      - name: Preserve unpacked source as readable repository files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add smart-auto-refresh
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: extract checked v1.1.1 extension source"
+            git push origin HEAD:main
+          fi
